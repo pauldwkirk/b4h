@@ -215,7 +215,7 @@ for(it in 1:numIts){
             log(1 - currentComponentParameters[j])
         }
       }
-      
+    }
       # Include the contribution of the mixture weights:
       unnormalisedComponentProbabilities <- 
         mixtureWeights * exp(logLikelihoodVector)
@@ -227,7 +227,7 @@ for(it in 1:numIts){
       # Sample an updated cluster allocation variable according to these probabilities:
       currentClusterLabels[i] <- sample(1:K, 1, prob = componentProbabilities)
       
-    }
+    
 
     
     
