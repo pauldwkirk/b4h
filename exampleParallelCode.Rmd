@@ -1,0 +1,272 @@
+---
+title: "Bayes4Health Example"
+author: "Paul DW Kirk"
+date: "12/08/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(pheatmap)
+library(RColorBrewer)
+library(parallel)
+library(foreach)
+```
+
+```{r}
+# Set working directory
+# setwd("your/directory/here")  https://cran.r-project.org/web/packages/gplite/vignettes/quickstart.html
+```
+
+# Binary data generation
+
+The below provides code to generate binary data that we will then try to cluster:
+
+```{r eval = TRUE}
+set.seed(10)
+
+n    <- 10000 # The overall population size
+K    <- 4    # The number of clusters/subpopulations
+w    <- c(0.1, 0.2, 0.3, 0.4) # The mixture weights (proportion of population in each cluster)
+w    <- w/sum(w)   # This ensures that the elements of w sum to 1 
+                   # (this step is not really needed in this specific case, but  
+                   # it is good to be sure to enforce this constraint)
+
+p    <- 20  # The number of variables / data dimension
+
+# We will create a variable called "clusterLabels" to store the cluster labels, 
+# which we will assume to be unknown when performing inference.
+# This variable can be initialised in a single line by drawing the cluster 
+# labels according to the probabilities in w:
+clusterLabels <- sample(1:K, n, replace = T, prob = w)
+
+
+# We will create a matrix to store the cluster-specific parameters (Bernoulli 
+# trial probabilities)
+clusterParameters <- matrix(nrow = K, ncol = p)
+for(i in 1:K)
+{
+  for(j in 1:p)
+  {
+    clusterParameters[i,j] <- rbeta(1, 1, 5) # We can tweak the Beta parameters to control, e.g. sparsity
+  }
+}
+
+# Now let's use the sampled cluster labels and the cluster parameters to 
+# generate some simulatd data:
+dataMatrix    <- matrix(nrow = n, ncol = p)  # This will hold the simulated data
+for(i in 1:n)
+{
+  currentClusterLabel <- clusterLabels[i]  # Get the cluster label for the i-th person
+  for(j in 1:p)
+  {
+    # Simulate data according to the parameters for the current cluster
+    dataMatrix[i,j] <- rbinom(1,1, clusterParameters[currentClusterLabel,j]) 
+    
+  }
+}
+
+# Let's visualise the current data, and the cluster labels
+
+#Create an "annotation row" to show the cluster label for each person
+annotationRow <- data.frame(
+  Cluster = factor(clusterLabels)
+  )
+
+#We require the data and annotation row to have the same rownames:
+rownames(annotationRow) <- rownames(dataMatrix) <- paste0("Person", seq(1,n))
+
+# Now use pheatmap to plot.  First plot without performing hierarchical
+# clusterng of the rows:
+pheatmap(dataMatrix, show_rownames = F, annotation_row = annotationRow, 
+         color = colorRampPalette(colors = c("white", "black"))(2), 
+         cluster_rows = F, cluster_cols = F)
+
+
+# Now show the clustering structure in the data:
+pheatmap(dataMatrix[sort(clusterLabels, index.return = T)$ix,], 
+         show_rownames = F, annotation_row = annotationRow, 
+         color = colorRampPalette(colors = c("white", "black"))(2),
+         cluster_rows = F)
+
+```
+
+# Bayesian finite mixture modelling
+
+We wish to infer the parameters of a finite mixture model that we will use to perform clustering of these binary data.
+
+```{r eval = TRUE}
+set.seed(1)
+
+#Let's initialise the cluster labels randomly
+currentClusterLabels    <- sample(1:K, n, replace = T)
+#currentClusterLabels    <- clusterLabels  # For debugging, uncommenting this line can be useful!
+#It is useful to keep track of the number of items in each cluster, as follows:
+nItemsInEachCluster     <- tabulate(currentClusterLabels, nbins = K)
+
+#Initialise a matrix to store the parameters for each component.  
+#Each row corresponds to a component, each column to a variable (data dimension)
+componentParameters <- matrix(nrow = K, ncol = p)
+
+#
+# Setting the parameters of the priors
+#####################################
+
+# 
+# beta priors:
+#
+# It may be sensible to set the parameters of the beta priors empirically, e.g.
+hyperParameters     <- rbind(colSums(dataMatrix), colSums(1-dataMatrix))/n
+# Note that hyperParameters is a 2 x p matrix, where each column gives the beta
+# hyperparameters for each variable, with row 1 corresponding to the \alpha 
+# parameter of the beta, and row 2 corresponding to the \beta parameter of the 
+# beta
+
+# 
+# Dirichlet prior:
+#
+# For the time being, we will fix to a = 0.1.  We can think later about 
+# whether or not we want to perform inference for a, e.g., using a Metropolis
+# within Gibbs step
+dirichletHyperparameter <- 0.1
+
+
+##############################################
+##############################################
+#
+# Perform the MCMC:
+#
+##############################################
+##############################################
+
+
+numIts <- 20  # Number of MCMC iterations
+
+# We will store the cluster labels sampled at each iteration.  Since we have a 
+# cluster label for each of the n people we are clustering at each iteration, we
+# need a numIts x n matrix
+# NOTE: if we were performing many iterations, storing this in memory might be
+# infeasible.  If so, we would need to write the cluster labels to a file at 
+# each iteration
+
+savedClusterLabelMatrix <- matrix(nrow = numIts, ncol = n)
+
+
+cl <- parallel::makeCluster(8)#, multicore = FALSE)
+doParallel::registerDoParallel(cl)
+
+
+for(it in 1:numIts){
+  
+  print(paste0("MCMC iteration number: ", it))
+  # Component-specific parameters (\theta_k) updates:
+  ###################################################
+  
+  print("   Updating thetas\n")
+  for(k in 1:K)
+  {
+    currentClusterData <- dataMatrix[currentClusterLabels == k, , drop = FALSE]  # Picks out the data in the current cluster
+    currentClusterSums <- colSums(currentClusterData)             # Works out how many 1s we have in each column
+
+    for(j in 1:p)
+    {
+      componentParameters[k,j] <- rbeta(
+        1, 
+        hyperParameters[1,j] + currentClusterSums[j], 
+        hyperParameters[2,j] + nItemsInEachCluster[k] - currentClusterSums[j])
+    }
+  }
+  
+  # Mixture weight (\pi_k) updates:
+  ##############################################
+  # Note: for now, we will use the rdirichlet function from MCMCprecision,
+  # but it is trivial to code up our own function to draw from a Dirichlet
+  # (using the relationship between the Dirichlet and gamma)
+  print("   Updating pi\n")
+
+  mixtureWeights <- MCMCprecision::rdirichlet(1, nItemsInEachCluster + 
+                                                dirichletHyperparameter)
+  
+  
+  
+  # Component allocation variable (z_i) updates:
+  ##############################################
+  print("   Updating allocations\n")
+
+  
+
+  # For each person, we will sample a new component allocation label:
+  currentClusterLabels <- foreach(i = 1:n, .combine = 'c') %dopar%
+  {
+
+    currentData         <- dataMatrix[i, , drop = FALSE]       # The data vector for the i-th person
+    logLikelihoodVector <- seq(0,0, length = K) # To store the log likelihoods associated with each cluster
+    
+    # We calculate the log likelihood associated with the current item being
+    # in each component:
+    for(k in 1:K)
+    {
+      currentComponentParameters <- componentParameters[k,]
+      for(j in 1:p)
+      {
+        if(currentData[j] == 1)
+        {
+          logLikelihoodVector[k] <- logLikelihoodVector[k] + 
+            log(currentComponentParameters[j])
+        }
+        else
+        {
+          logLikelihoodVector[k] <- logLikelihoodVector[k] + 
+            log(1 - currentComponentParameters[j])
+        }
+      }
+    }
+      
+    # Include the contribution of the mixture weights:
+    unnormalisedComponentProbabilities <- 
+      mixtureWeights * exp(logLikelihoodVector)
+      
+    # Normalise to get probabilities:
+    componentProbabilities <- unnormalisedComponentProbabilities/
+      sum(unnormalisedComponentProbabilities)
+      
+    # Sample an updated cluster allocation variable according to these probabilities:
+    sample(1:K, 1, prob = componentProbabilities)
+      
+    }
+
+  # Recalculate cluster statistics:
+  ################################
+  nItemsInEachCluster     <- tabulate(currentClusterLabels, nbins = K)
+  print(nItemsInEachCluster)
+
+  # Visualise the clusters:
+  
+  # Create an "annotation row" to show the currently sampled cluster labels
+  # for each person:
+  currentAnnotationRow <- data.frame(
+    Cluster = factor(currentClusterLabels),
+    trueClusters = factor(clusterLabels)
+  )
+
+  #We require the data and annotation row to have the same rownames:
+  rownames(currentAnnotationRow) <- rownames(dataMatrix) 
+
+  
+  pheatmap(dataMatrix[sort(currentClusterLabels, index.return = T)$ix,], 
+           cluster_rows = F, show_rownames = F, show_colnames = F, 
+           color = colorRampPalette(colors = c("white", "black"))(2),
+           annotation_row = currentAnnotationRow)
+
+  # Sys.sleep(1)
+}
+
+parallel::stopCluster(cl)
+
+
+```
+
+
