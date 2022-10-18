@@ -1,0 +1,396 @@
+---
+title: "Conjugate Bayes Gaussian"
+author: "Paul DW Kirk"
+date: "18/10/2022"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(miscF)
+library(mvtnorm)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+```
+
+
+## Bayesian inference of the parameters of a multivariate normal.
+
+See also: 
+
+* miscF::mvn.bayes
+* Berger, J. O., Sun, D. (2008) Objective Priors for the Bivariate Normal Model. The Annals of Statistics 36 963-982.
+* Gelman, A., Carlin, J. B., Stern, H. S., Rubin, D. B. (2003) Bayesian Data Analysis. 2nd ed. London: Chapman and Hall
+* Sun, D., Berger, J. O. (2009) Objective Priors for the Multivariate Normal Model. In Bayesian Statistics 8, Ed. J. Bernardo, M. Bayarri, J. Berger, A. Dawid, D. Heckerman, A. Smith and M. West. Oxford: Oxford University Press.
+
+
+
+Before we start, let's set up some useful plotting functions, and provide examples of their use:
+```{r}
+
+#We will illustrate covariance matrices using confidence ellipses:
+
+confidenceEllipse <- function(mu = c(0,0), Sigma = matrix(c(1, 0, 0, 1), 2, 2), confidenceLevel=0.95){
+  radius <- sqrt(2 * stats::qf(confidenceLevel, 2, Inf))
+  chol_decomp <- chol(Sigma)
+  angles <- (0:100) * 2 * pi/100
+  unit.circle <- cbind(cos(angles), sin(angles))
+  ellipse <- t(mu + radius * t(unit.circle %*% chol_decomp))
+  colnames(ellipse) <- c("X1","X2")
+  as.data.frame(ellipse)
+}
+
+#Let's try out the above and a few other plotting functions:
+set.seed(1)
+
+#Generate some data:
+trueMean   <- c(12,316)
+trueSigma  <- matrix(c(           100    ,  0.7*sqrt(100*100),
+                                  0.7*sqrt(100*100) ,       100        ),
+                     nrow=2 )
+sampleSize <- 1000
+
+normalData          <- rmvnorm(sampleSize, trueMean, trueSigma)
+normalDataFrame     <- normalData %>% as.data.frame() %>% setNames(c("x", "y"))
+
+#Scatter plot of the data
+p1 <-  ggplot(normalDataFrame, aes(x=x, y=y)) + geom_point()
+plot(p1)
+
+#Scatter plot + ellipse
+myEllipse <- confidenceEllipse(mu = trueMean, Sigma = trueSigma, 
+                               confidenceLevel =0.95)
+p2 <-  p1 + geom_path(myEllipse, mapping = aes(x=X1, y=X2), colour='blue')
+plot(p2)
+
+#Histograms of marginals:
+p3 <- ggplot(normalDataFrame, aes(x=x))+
+  geom_histogram(color="darkblue", fill="lightblue", bins = 30)
+plot(p3)
+
+p4 <- ggplot(normalDataFrame, aes(x=y))+
+  geom_histogram(color="firebrick", fill="lightcoral", bins = 30)
+plot(p4)
+
+#Put everything together:
+
+ggarrange(
+  p2,                # First row with line plot
+  # Second row with box and dot plots
+  ggarrange(p3, p4, ncol = 2, labels = c("B", "C")), 
+  nrow = 2, 
+  labels = "A"       # Label of the line plot
+)
+```
+
+## Conjugate analysis.
+
+Now let's do some conjugate analyses of these data
+```{r}
+set.seed(1)
+posteriorSample <- mvn.bayes(normalData, 10000)
+
+#Let's summarise the posterior by taking the posterior means:
+estimatedMean       <- colMeans(posteriorSample$Mu.save)
+estimatedCovariance <- apply(posteriorSample$Sigma.save, c(1,2), mean)
+
+print(estimatedMean)
+
+print(estimatedCovariance)
+
+#And let's plot, together with some draws from the posterior
+myEllipseEstimated <- confidenceEllipse(mu = estimatedMean, Sigma = estimatedCovariance, 
+                                        confidenceLevel =0.95)
+
+myEllipseSample1 <- confidenceEllipse(mu = posteriorSample$Mu.save[1,], Sigma = posteriorSample$Sigma.save[,,1], 
+                                      confidenceLevel =0.95)
+
+myEllipseSample2 <- confidenceEllipse(mu = posteriorSample$Mu.save[2,], Sigma = posteriorSample$Sigma.save[,,2], 
+                                      confidenceLevel =0.95)
+
+myEllipseSample3 <- confidenceEllipse(mu = posteriorSample$Mu.save[3,], Sigma = posteriorSample$Sigma.save[,,3], 
+                                      confidenceLevel =0.95)
+
+myEllipseSample4 <- confidenceEllipse(mu = posteriorSample$Mu.save[4,], Sigma = posteriorSample$Sigma.save[,,4], 
+                                      confidenceLevel =0.95)
+
+myEllipseSample5 <- confidenceEllipse(mu = posteriorSample$Mu.save[5,], Sigma = posteriorSample$Sigma.save[,,5], 
+                                      confidenceLevel =0.95)
+
+myEllipseSample6 <- confidenceEllipse(mu = posteriorSample$Mu.save[6,], Sigma = posteriorSample$Sigma.save[,,6], 
+                                      confidenceLevel =0.95)
+
+
+pPost <-  p1 + geom_path(myEllipseSample1, mapping = aes(x=X1, y=X2), colour='black') + geom_path(myEllipseSample2, mapping = aes(x=X1, y=X2), colour='black')+ geom_path(myEllipseSample3, mapping = aes(x=X1, y=X2), colour='black')+ geom_path(myEllipseSample4, mapping = aes(x=X1, y=X2), colour='black')+ geom_path(myEllipseSample5, mapping = aes(x=X1, y=X2), colour='black')+ geom_path(myEllipseSample6, mapping = aes(x=X1, y=X2), colour='black') + geom_path(myEllipseEstimated, mapping = aes(x=X1, y=X2), colour='blue') 
+plot(pPost) #Looks pretty good
+
+# Note that mvn.bayes automatically sets the parameters of the prior.  We may 
+# want a little more control over the prior, so let's define our own function 
+# by adapting miscF:::simMvnConjugate :
+
+conjugateNormalAnalysis <- function (X, nsim, k0, v0, mu0, Gamma0) 
+{
+  n     <- nrow(X)
+  k     <- ncol(X)
+  est   <- mvn.ub(X)
+  bar.x <- est$hatMu
+  
+  S     <- Gamma0 * (n - 1)
+  kn    <- k0 + n
+  mun   <- (k0/kn) * mu0 + (n/kn) * bar.x
+  vn    <- v0 + n
+  Gamman <- Gamma0 + S + (k0 * n/kn) * (bar.x - mu0) %*% t(bar.x - 
+                                                             mu0)
+  Sigma <- array(0, dim = c(k, k, nsim))
+  Mu <- matrix(0, ncol = k, nrow = nsim)
+  for (i in 1:nsim) {
+    Sigma[, , i] <- MCMCpack::riwish(vn, Gamman)
+    Mu[i, ] <- mvrnorm(1, mun, Sigma[, , i]/kn)
+  }
+  list(Sigma.save = Sigma, Mu.save = Mu)
+}
+
+
+# We should be able to exactly reproduce the above analysis by setting the 
+# parameters of the prior appropriately
+posteriorSample2 <- conjugateNormalAnalysis(normalData, 10000, k0 = 1, 
+                                            v0 = ncol(normalData), 
+                                            mu0 = mvn.ub(normalData)$hatMu, 
+                                            Gamma0 = mvn.ub(normalData)$hatSigma)
+
+#Let's summarise the posterior by taking the posterior means:
+estimatedMean2       <- colMeans(posteriorSample2$Mu.save)
+estimatedCovariance2 <- apply(posteriorSample2$Sigma.save, c(1,2), mean)
+
+print(estimatedMean2)
+
+print(estimatedMean)  #Pretty close!
+
+
+print(estimatedCovariance2)
+
+print(estimatedCovariance) #Pretty close!
+
+```
+
+## Semi-supervised two component mixture of Gaussians.
+
+Now let's fit a 2 component mixture of Gaussians when some of the cluster labels are known.
+
+```{r}
+set.seed(1)
+
+trueMean2   <- c(50,350)
+trueSigma2  <- matrix(c(           100  ,  0.3*sqrt(100*100),
+                                   0.3*sqrt(100*100) ,       100        ),
+                      nrow=2 )
+normalData2         <- rmvnorm(sampleSize, trueMean2, trueSigma2)
+normalDataFrame2    <- normalData2 %>% as.data.frame() %>% setNames(c("x", "y"))
+
+
+
+
+trueMean3   <- c(0,400)
+trueSigma3  <- matrix(c(           100  ,  0,
+                                   0 ,       100        ),
+                      nrow=2 )
+normalData3         <- rmvnorm(sampleSize, trueMean3, trueSigma3)
+normalDataFrame3    <- normalData3 %>% as.data.frame() %>% setNames(c("x", "y"))
+
+
+
+
+allData <- rbind(normalDataFrame, normalDataFrame2, normalDataFrame3)
+
+#Scatter plot of the data
+pmix1 <-  ggplot(allData, aes(x=x, y=y)) + geom_point()
+plot(pmix1)
+
+#Scatter plot + ellipses
+myEllipse2 <- confidenceEllipse(mu = trueMean2, Sigma = trueSigma2, 
+                                confidenceLevel =0.95)
+
+
+myEllipse3 <- confidenceEllipse(mu = trueMean3, Sigma = trueSigma3, 
+                                confidenceLevel =0.95)
+
+
+pmix2 <-  pmix1 + geom_path(myEllipse, mapping = aes(x=X1, y=X2), colour='red') + 
+  geom_path(myEllipse2, mapping = aes(x=X1, y=X2), colour='blue')+ 
+  geom_path(myEllipse3, mapping = aes(x=X1, y=X2), colour='green')
+plot(pmix2)
+
+# Let's perform Bayesian inference for the 2 component mixture, assuming both 
+# classes equally likely a priori
+
+nIterations   <- 5
+
+savedCluster1Means  <- savedCluster2Means <- savedCluster3Means <- matrix(nrow = nIterations, ncol = 2)
+savedMixtureWeights <- matrix(nrow = nIterations, ncol = 3)
+savedCluster1Covs   <- savedCluster2Covs  <- savedCluster3Covs  <- array(dim = c(2, 2, nIterations))
+savedClusterLabels  <- matrix(nrow = nIterations, ncol = nrow(allData) )
+
+clusterLabels <- sample(c(1,2,3), size = nrow(allData), replace = T)
+
+clusterLabels <- c(seq(1,1,length = 1000), seq(2,2,length = 1000), seq(3,3,length = 1000))
+
+#Let's assume some of the labels are known - say, the first 100 and last 100
+#clusterLabels[1:100] <- 1
+#clusterLabels[(length(clusterLabels)-99):length(clusterLabels)] <- 2
+
+#Let's keep a note of which cluster labels are known, and which are not
+clusterLabelKnown <- vector(mode = "logical", length = length(clusterLabels))
+clusterLabelKnown[c(1:100, 1001:1100, (length(clusterLabels)-99):length(clusterLabels))] <- TRUE
+
+knownCluster1Data <- allData[clusterLabelKnown & clusterLabels == 1,]
+knownCluster2Data <- allData[clusterLabelKnown & clusterLabels == 2,]
+knownCluster3Data <- allData[clusterLabelKnown & clusterLabels == 3,]
+
+
+for(i in 1:nIterations)
+{
+  print(paste("Iteration number:", i))
+  cluster1Data <- allData[clusterLabels == 1,]
+  cluster2Data <- allData[clusterLabels == 2,]
+  cluster3Data <- allData[clusterLabels == 3,]
+  
+  ###############################################
+  ##
+  ## Update the cluster-specific parameters
+  ##
+  ###############################################
+  posteriorSampleCluster1 <- conjugateNormalAnalysis(cluster1Data, 1, k0 = 1, 
+                                            v0 = ncol(knownCluster1Data), 
+                                            mu0 = mvn.ub(knownCluster1Data)$hatMu, 
+                                            Gamma0 = mvn.ub(knownCluster1Data)$hatSigma)
+  
+  
+  posteriorSampleCluster2 <- conjugateNormalAnalysis(cluster2Data, 1, k0 = 1, 
+                                            v0 = ncol(knownCluster2Data), 
+                                            mu0 = mvn.ub(knownCluster2Data)$hatMu, 
+                                            Gamma0 = mvn.ub(knownCluster2Data)$hatSigma)
+  
+  posteriorSampleCluster3 <- conjugateNormalAnalysis(cluster3Data, 1, k0 = 1, 
+                                            v0 = ncol(knownCluster3Data), 
+                                            mu0 = mvn.ub(knownCluster3Data)$hatMu, 
+                                            Gamma0 = mvn.ub(knownCluster3Data)$hatSigma)
+  
+
+    ##The below could be used if we didn't have any labelled data
+  #posteriorSampleCluster1 <- conjugateNormalAnalysis(cluster1Data, 1, k0 = 0.01,
+  #                                                   v0 = ncol(allData) + 2,
+  #                                                   mu0 = mvn.ub(allData)$hatMu,
+  #                                                   Gamma0 = mvn.ub(allData)$hatSigma/2)
+
+
+  #posteriorSampleCluster2 <- conjugateNormalAnalysis(cluster2Data, 1, k0 = 0.01,
+  #                                                   v0 = ncol(allData) + 2,
+  #                                                   mu0 = mvn.ub(allData)$hatMu,
+  #                                                   Gamma0 = mvn.ub(allData)$hatSigma/2)
+  
+  # For convenience and ease of reading, store the means and variances in their
+  # own variables:
+  currentCluster1Mean <- posteriorSampleCluster1$Mu.save[1,]
+  currentCluster1Cov  <- posteriorSampleCluster1$Sigma.save[,,1]
+  
+  currentCluster2Mean <- posteriorSampleCluster2$Mu.save[1,]
+  currentCluster2Cov  <- posteriorSampleCluster2$Sigma.save[,,1]
+  
+  currentCluster3Mean <- posteriorSampleCluster3$Mu.save[1,]
+  currentCluster3Cov  <- posteriorSampleCluster3$Sigma.save[,,1]
+  
+  
+  ###############################################
+  ##
+  ## Update the mixture weights
+  ##
+  ###############################################
+  pi1 <- rbeta(1, 1 + sum(clusterLabels == 1), 1 + sum(clusterLabels == 2))
+  pi2 <- 1 - pi1
+  pi3 <- (pi2+pi1)/2
+  
+  piSum <- pi1 + pi2 + pi3
+  
+  pi1 <- pi1/piSum
+  pi2 <- pi2/piSum
+  pi3 <- pi3/piSum
+  print(c(pi1,pi2,pi3))
+  
+  ###############################################
+  ##
+  ## Update the cluster labels (note: could make this a parallel for [!])
+  ##
+  ###############################################
+  
+  entropyVector <- vector(mode = "numeric", length = nrow(allData))
+  
+  for(j in 1:nrow(allData))
+  {
+    #if(!clusterLabelKnown[j])
+    #{
+      cluster1LogLikelihood  <- dmvnorm(allData[j,], mean = currentCluster1Mean, sigma = currentCluster1Cov, log = T)
+      cluster2LogLikelihood  <- dmvnorm(allData[j,], mean = currentCluster2Mean, sigma = currentCluster2Cov, log = T)
+      cluster3LogLikelihood  <- dmvnorm(allData[j,], mean = currentCluster3Mean, sigma = currentCluster3Cov, log = T)
+      
+      currentDenominator     <- exp(cluster1LogLikelihood + log(pi1)) + exp(cluster2LogLikelihood + log(pi2))+ exp(cluster3LogLikelihood + log(pi3))
+      
+      probClusterMembership  <- c(exp(cluster1LogLikelihood + log(pi1)), exp(cluster2LogLikelihood + log(pi2)), exp(cluster3LogLikelihood + log(pi3)))
+      probClusterMembership  <- probClusterMembership/sum(probClusterMembership)
+      clusterLabels[j]       <- sample(1:3, size =1, prob = probClusterMembership)
+      
+      entropyVector[j] <- -sum(probClusterMembership*log(probClusterMembership))
+    #}
+  }
+  
+  ###############################################
+  ##
+  ## Save down the currently sampled values
+  ##
+  ###############################################
+  savedCluster1Means[i,]  <- currentCluster1Mean
+  savedCluster2Means[i,]  <- currentCluster2Mean
+  savedCluster3Means[i,]  <- currentCluster3Mean
+  savedMixtureWeights[i,] <- c(pi1, pi2, pi3)
+  savedCluster1Covs[,,i]  <- currentCluster1Cov
+  savedCluster2Covs[,,i]  <- currentCluster2Cov
+  savedCluster3Covs[,,i]  <- currentCluster3Cov
+  savedClusterLabels[i,]  <- clusterLabels
+  
+  #Show the currently sampled fit to the data:
+  myEllipsePost1 <- confidenceEllipse(mu = savedCluster1Means[i,], Sigma = savedCluster1Covs[,,i], 
+                                      confidenceLevel =0.95)
+  myEllipsePost2 <- confidenceEllipse(mu = savedCluster2Means[i,], Sigma = savedCluster2Covs[,,i], 
+                                      confidenceLevel =0.95)
+  myEllipsePost3 <- confidenceEllipse(mu = savedCluster3Means[i,], Sigma = savedCluster3Covs[,,i], 
+                                      confidenceLevel =0.95)
+
+  allData_labelled <- cbind(allData, as.factor(clusterLabels))
+  names(allData_labelled) <- c(names(allData), "inferredLabel")
+  pmix1 <-  ggplot(allData_labelled, aes(x=x, y=y, color= inferredLabel)) + geom_point()
+
+  
+  pmixPost <-  pmix1 + geom_path(myEllipsePost1, mapping = aes(x=X1, y=X2), colour='red') + 
+    geom_path(myEllipsePost2, mapping = aes(x=X1, y=X2), colour='green') + 
+    geom_path(myEllipsePost3, mapping = aes(x=X1, y=X2), colour='blue') + 
+    ggtitle(paste("Iteration number:", 10000 + i))
+  plot(pmixPost)
+
+
+  pmix2 <-  ggplot(allData_labelled, aes(x=x, y=y, color= inferredLabel)) + geom_point(aes(color = 10*entropyVector))
+
+  
+  pmixPost2 <-  pmix2 +
+    ggtitle(paste("Iteration number:", 10000 + i))
+  plot(pmixPost2)
+
+    
+}
+
+```
+
+
+
+
+
